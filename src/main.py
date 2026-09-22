@@ -1,44 +1,7 @@
 import requests
 import time
 from pathlib import Path
-
-USER_AGENT = "FlyRankInternship-A9/1.0 (+https://github.com/ssuhaan-jaiin/flyrank_scraper)"
-TIMEOUT = 10
-CACHE_DIR = Path("cache")
-
-CACHE_DIR.mkdir(exist_ok=True)
-
-
-def fetch(url: str, cache_filename: str) -> str:
-    cache_path = CACHE_DIR / cache_filename
-
-    if cache_path.exists():
-        print(f"CACHE HIT: {cache_filename}")
-        return cache_path.read_text()
-
-    print(f"FETCH: {url}")
-    response = requests.get(
-        url,
-        headers={"User-Agent": USER_AGENT},
-        timeout=TIMEOUT
-    )
-
-    if response.status_code != 200:
-        raise Exception(f"Fetch failed: {response.status_code} for {url}")
-
-    print(f"  -> status {response.status_code}, {len(response.text)} bytes")
-    cache_path.write_text(response.text)
-    return response.text
-
-
-if __name__ == "__main__":
-    html = fetch("https://books.toscrape.com/catalogue/page-1.html", "catalogue-page-1.html")
-    print(f"Page 1 loaded, {len(html)} characters")
-
-
-import requests
-import time
-from pathlib import Path
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -105,5 +68,45 @@ def discover_book_urls():
     return unique_urls
 
 
+def extract_book(url: str, source_page: str) -> dict:
+    cache_filename = url.rstrip("/").split("/")[-2] + ".html"
+    html = fetch(url, cache_filename)
+    soup = BeautifulSoup(html, "html.parser")
+
+    product_main = soup.select_one("div.product_main")
+    title = product_main.select_one("h1").get_text(strip=True)
+
+    price_text = soup.select_one("p.price_color").get_text(strip=True)
+    availability_text = soup.select_one("p.availability").get_text(strip=True)
+
+    rating_tag = product_main.select_one("p.star-rating")
+    rating_text = rating_tag["class"][1] if rating_tag else None
+
+    description_tag = soup.select_one("#product_description")
+    if description_tag:
+        description = description_tag.find_next_sibling("p").get_text(strip=True)
+    else:
+        description = None
+
+    return {
+        "title": title,
+        "product_url": url,
+        "price_text": price_text,
+        "availability_text": availability_text,
+        "rating_text": rating_text,
+        "description": description,
+        "source_page": source_page,
+        "fetched_at": datetime.now(timezone.utc).isoformat()
+    }
+
+
 if __name__ == "__main__":
     urls = discover_book_urls()
+
+    records = []
+    for url in urls:
+        record = extract_book(url, source_page=url)
+        records.append(record)
+
+    print(f"detail_pages={len(records)}")
+    print(records[0])
