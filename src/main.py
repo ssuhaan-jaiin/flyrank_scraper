@@ -1,15 +1,33 @@
+import re
+import json
 import requests
 import time
 from pathlib import Path
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from pydantic import BaseModel, HttpUrl, ValidationError
+from typing import Optional
 
 USER_AGENT = "FlyRankInternship-A9/1.0 (+https://github.com/ssuhaan-jaiin/flyrank_scraper)"
 TIMEOUT = 10
 CACHE_DIR = Path("cache")
+OUTPUT_DIR = Path("output")
 
 CACHE_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+class BookRecord(BaseModel):
+    title: str
+    product_url: HttpUrl
+    price_text: str
+    price_gbp: float
+    availability_text: str
+    rating_text: Optional[str] = None
+    description: Optional[str] = None
+    source_page: HttpUrl
+    fetched_at: str
 
 
 def fetch(url: str, cache_filename: str) -> str:
@@ -100,13 +118,47 @@ def extract_book(url: str, source_page: str) -> dict:
     }
 
 
+def parse_price(price_text: str) -> float:
+    match = re.search(r"[\d.]+", price_text)
+    return float(match.group())
+
+
+def normalize_and_validate(raw_records: list) -> tuple:
+    seen_urls = {}
+    valid = []
+    errors = []
+
+    for raw in raw_records:
+        url = raw["product_url"]
+
+        if url in seen_urls:
+            continue
+        seen_urls[url] = True
+
+        try:
+            raw_with_price = {**raw, "price_gbp": parse_price(raw["price_text"])}
+            record = BookRecord(**raw_with_price)
+            valid.append(json.loads(record.model_dump_json()))
+        except (ValidationError, ValueError) as e:
+            errors.append({"url": url, "reason": str(e)})
+
+    return valid, errors
+
+
 if __name__ == "__main__":
     urls = discover_book_urls()
 
-    records = []
+    raw_records = []
     for url in urls:
         record = extract_book(url, source_page=url)
-        records.append(record)
+        raw_records.append(record)
 
-    print(f"detail_pages={len(records)}")
-    print(records[0])
+    print(f"detail_pages={len(raw_records)}")
+
+    valid_records, errors = normalize_and_validate(raw_records)
+
+    (OUTPUT_DIR / "books.json").write_text(json.dumps(valid_records, indent=2))
+    (OUTPUT_DIR / "errors.json").write_text(json.dumps(errors, indent=2))
+
+    print(f"valid_records={len(valid_records)}")
+    print(f"invalid_records={len(errors)}")
